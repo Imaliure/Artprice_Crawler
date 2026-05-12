@@ -126,12 +126,15 @@ def scrape_artprice():
                 driver.execute_script(f"""
                     const radio = document.querySelector('input[type="radio"][value="{{radio_value}}"]');
                     if (radio) {{
-                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked').set;
-                        nativeSetter.call(radio, true);
-                        radio.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        const label = radio.closest('label');
+                        if (label) {{
+                            label.click();
+                        }} else {{
+                            radio.click();
+                        }}
                     }}
                 """.replace("{{radio_value}}", radio_value))
-                time.sleep(3)
+                time.sleep(4)
                 latest = parse_svg_latest_values(driver)
                 charts[chart_name] = latest
             except:
