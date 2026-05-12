@@ -120,7 +120,7 @@ def scrape_artprice():
 
         for radio_value, chart_name in chart_types:
             try:
-                driver.execute_script(f'const radio = document.querySelector(\\'input[type="radio"][value="{radio_value}"]\\'); if (radio) radio.click();')
+                driver.execute_script(f"""const radio = document.querySelector('input[type="radio"][value="{radio_value}"]'); if (radio) radio.click();""")
                 time.sleep(1)
                 charts[chart_name] = get_svg_fallback()
             except:
