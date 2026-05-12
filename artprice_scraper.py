@@ -15,51 +15,70 @@ except ImportError:
 app = FastAPI(title="Artprice Scraper API")
 
 
-def parse_svg_latest_values(driver):
-    """Extract the latest data point from each SVG chart line using y-axis scale."""
-    script = """
-    const svg = document.querySelector('.recharts-surface');
-    if (!svg) return null;
+EXTRACT_ALL_CHARTS_JS = """
+// Single JS call: select Annual, iterate all 5 radio types, extract SVG data
+// Returns a Promise that resolves with all chart data
 
-    // Get y-axis tick values and positions
-    const yTicks = [];
-    svg.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick').forEach(tick => {
-        const line = tick.querySelector('line');
-        const text = tick.querySelector('text tspan');
-        if (line && text) {
-            yTicks.push({ y: parseFloat(line.getAttribute('y1')), val: parseFloat(text.textContent) });
-        }
-    });
-    if (yTicks.length < 2) return null;
+async function extractAllCharts() {
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-    // Build linear scale from y-pixel to value
-    yTicks.sort((a, b) => a.y - b.y);
-    const y0 = yTicks[0].y, v0 = yTicks[0].val;
-    const y1 = yTicks[yTicks.length - 1].y, v1 = yTicks[yTicks.length - 1].val;
-
-    function yToValue(yPx) {
-        return v0 + (yPx - y0) / (y1 - y0) * (v1 - v0);
+    function parseLatestFromSVG() {
+        const svg = document.querySelector('.recharts-surface');
+        if (!svg) return null;
+        const yTicks = [];
+        svg.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick').forEach(tick => {
+            const line = tick.querySelector('line');
+            const text = tick.querySelector('text tspan');
+            if (line && text) {
+                yTicks.push({ y: parseFloat(line.getAttribute('y1')), val: parseFloat(text.textContent) });
+            }
+        });
+        if (yTicks.length < 2) return null;
+        yTicks.sort((a, b) => a.y - b.y);
+        const y0 = yTicks[0].y, v0 = yTicks[0].val;
+        const y1 = yTicks[yTicks.length - 1].y, v1 = yTicks[yTicks.length - 1].val;
+        function yToValue(yPx) { return v0 + (yPx - y0) / (y1 - y0) * (v1 - v0); }
+        const lines = {};
+        svg.querySelectorAll('.recharts-line path').forEach(path => {
+            const name = path.getAttribute('name');
+            const d = path.getAttribute('d');
+            if (!name || !d || d.length < 5) { lines[name] = null; return; }
+            const coords = d.match(/[\\d.]+,[\\d.]+/g);
+            if (!coords || coords.length === 0) { lines[name] = null; return; }
+            const lastCoord = coords[coords.length - 1].split(',');
+            lines[name] = Math.round(yToValue(parseFloat(lastCoord[1])) * 100) / 100;
+        });
+        return lines;
     }
 
-    // Extract last coordinate from each path
-    const lines = {};
-    svg.querySelectorAll('.recharts-line path').forEach(path => {
-        const name = path.getAttribute('name');
-        const d = path.getAttribute('d');
-        if (!name || !d || d.length < 5) { lines[name] = null; return; }
-        // Last coordinate pair: find the final y value
-        const coords = d.match(/[\\d.]+,[\\d.]+/g);
-        if (!coords || coords.length === 0) { lines[name] = null; return; }
-        const lastCoord = coords[coords.length - 1].split(',');
-        const lastY = parseFloat(lastCoord[1]);
-        lines[name] = Math.round(yToValue(lastY) * 100) / 100;
-    });
-    return lines;
-    """
-    try:
-        return driver.execute_script(script)
-    except:
-        return None
+    // Select Annual period
+    const sel = document.querySelector('select.form-control');
+    if (sel) {
+        sel.value = 'year';
+        sel.dispatchEvent(new Event('change', {bubbles: true}));
+    }
+    await sleep(1500);
+
+    const types = [
+        ["9", "barometer"],
+        ["1,5", "artworks_acquisition"],
+        ["2,6", "financial_situation"],
+        ["3,7", "economic_climate"],
+        ["4,8", "art_prices"]
+    ];
+
+    const result = {};
+    for (const [val, name] of types) {
+        const radio = document.querySelector('input[type="radio"][value="' + val + '"]');
+        if (radio) radio.click();
+        await sleep(1200);
+        result[name] = parseLatestFromSVG();
+    }
+    return result;
+}
+
+return extractAllCharts();
+"""
 
 
 def scrape_artprice():
@@ -96,40 +115,16 @@ def scrape_artprice():
         time.sleep(3)
         html = driver.page_source
 
-        # --- Extract chart data for all 5 types with Annual period ---
+        # Single JS call extracts all 5 chart types with Annual period
         charts = {}
-        chart_types = [
-            ("9", "barometer"),
-            ("1,5", "artworks_acquisition"),
-            ("2,6", "financial_situation"),
-            ("3,7", "economic_climate"),
-            ("4,8", "art_prices"),
-        ]
-
-        # Select "Annual" period
         try:
-            driver.execute_script("""
-                const sel = document.querySelector('select.form-control');
-                if (sel) {
-                    sel.value = 'year';
-                    sel.dispatchEvent(new Event('change', {bubbles: true}));
-                }
-            """)
-            time.sleep(1.5)
-        except:
-            pass
-
-        for radio_value, chart_name in chart_types:
-            try:
-                driver.execute_script(f"""
-                    const radio = document.querySelector('input[type="radio"][value="{radio_value}"]');
-                    if (radio) {{ radio.click(); }}
-                """)
-                time.sleep(1)
-                latest = parse_svg_latest_values(driver)
-                charts[chart_name] = latest
-            except:
-                charts[chart_name] = None
+            charts = driver.execute_async_script("""
+                const callback = arguments[arguments.length - 1];
+                """ + EXTRACT_ALL_CHARTS_JS.replace("return extractAllCharts();", "extractAllCharts().then(callback);"))
+            if not charts:
+                charts = {}
+        except Exception as e:
+            charts = {}
 
         data = {"data": html, "charts": charts}
     except Exception as e:
