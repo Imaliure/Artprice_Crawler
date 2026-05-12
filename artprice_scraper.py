@@ -44,23 +44,30 @@ def parse_svg_latest_values(driver):
     // Extract last coordinate from each path
     const lines = {};
     svg.querySelectorAll('.recharts-line path').forEach(path => {
+        // Ignore hidden or faded out paths from animations
+        const strokeOpacity = window.getComputedStyle(path).strokeOpacity;
+        const opacity = window.getComputedStyle(path).opacity;
+        if (strokeOpacity === '0' || opacity === '0' || path.getAttribute('stroke') === 'none') {
+            return;
+        }
+
         const name = path.getAttribute('name');
         const d = path.getAttribute('d');
-        if (!name || !d || d.length < 5) { lines[name] = null; return; }
+        if (!name || !d || d.length < 5) return;
+        
         // Last coordinate pair: find the final y value
         const coords = d.match(/[\\d.]+,[\\d.]+/g);
-        if (!coords || coords.length === 0) { lines[name] = null; return; }
+        if (!coords || coords.length === 0) return;
         const lastCoord = coords[coords.length - 1].split(',');
         const lastY = parseFloat(lastCoord[1]);
         lines[name] = Math.round(yToValue(lastY) * 100) / 100;
     });
-    return lines;
+    return Object.keys(lines).length > 0 ? lines : null;
     """
     try:
         return driver.execute_script(script)
     except:
         return None
-
 
 def scrape_artprice():
     url = "https://www.artprice.com/artmarket-confidence-index"
@@ -119,12 +126,9 @@ def scrape_artprice():
                 driver.execute_script(f"""
                     const radio = document.querySelector('input[type="radio"][value="{{radio_value}}"]');
                     if (radio) {{
-                        const label = radio.closest('label');
-                        if (label) {{
-                            label.click();
-                        }} else {{
-                            radio.click();
-                        }}
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked').set;
+                        nativeSetter.call(radio, true);
+                        radio.dispatchEvent(new Event('change', {{ bubbles: true }}));
                     }}
                 """.replace("{{radio_value}}", radio_value))
                 time.sleep(3)
