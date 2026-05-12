@@ -14,17 +14,58 @@ except ImportError:
 
 app = FastAPI(title="Artprice Scraper API")
 
-def get_intercepted_data(driver):
-    """Extract raw JSON data intercepted from fetch/XHR."""
+
+def parse_svg_latest_values(driver):
+    """Extract the latest data point from each SVG chart line using y-axis scale."""
+    script = """
+    const svg = document.querySelector('.recharts-surface');
+    if (!svg) return null;
+
+    // Get y-axis tick values and positions
+    const yTicks = [];
+    svg.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick').forEach(tick => {
+        const line = tick.querySelector('line');
+        const text = tick.querySelector('text tspan');
+        if (line && text) {
+            yTicks.push({ y: parseFloat(line.getAttribute('y1')), val: parseFloat(text.textContent) });
+        }
+    });
+    if (yTicks.length < 2) return null;
+
+    // Build linear scale from y-pixel to value
+    yTicks.sort((a, b) => a.y - b.y);
+    const y0 = yTicks[0].y, v0 = yTicks[0].val;
+    const y1 = yTicks[yTicks.length - 1].y, v1 = yTicks[yTicks.length - 1].val;
+
+    function yToValue(yPx) {
+        return v0 + (yPx - y0) / (y1 - y0) * (v1 - v0);
+    }
+
+    // Extract last coordinate from each path
+    const lines = {};
+    svg.querySelectorAll('.recharts-line path').forEach(path => {
+        const name = path.getAttribute('name');
+        const d = path.getAttribute('d');
+        if (!name || !d || d.length < 5) { lines[name] = null; return; }
+        // Last coordinate pair: find the final y value
+        const coords = d.match(/[\\d.]+,[\\d.]+/g);
+        if (!coords || coords.length === 0) { lines[name] = null; return; }
+        const lastCoord = coords[coords.length - 1].split(',');
+        const lastY = parseFloat(lastCoord[1]);
+        lines[name] = Math.round(yToValue(lastY) * 100) / 100;
+    });
+    return lines;
+    """
     try:
-        return driver.execute_script("return window.__API_INTERCEPT__;")
+        return driver.execute_script(script)
     except:
-        return {}
+        return None
+
 
 def scrape_artprice():
     url = "https://www.artprice.com/artmarket-confidence-index"
-    
-    # Clean up profile on Windows
+
+    # Clean up profile on Windows (ignore on Linux/Render)
     try:
         if os.name == 'nt':
             os.remove(os.path.join(os.environ.get('APPDATA', ''), 'undetected_chromedriver', 'undetected_chromedriver.exe'))
@@ -46,35 +87,11 @@ def scrape_artprice():
         return {"error": f"Failed to initialize Chrome: {str(e)}"}
 
     try:
-        # Inject interceptor BEFORE page loads
-        interceptor_script = """
-            window.__API_INTERCEPT__ = {};
-            const origFetch = window.fetch;
-            window.fetch = async function(...args) {
-                const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : 'unknown');
-                const response = await origFetch.apply(this, args);
-                const clone = response.clone();
-                clone.text().then(text => {
-                    try { window.__API_INTERCEPT__[url] = JSON.parse(text); } catch(e) {}
-                });
-                return response;
-            };
-            const origXhrOpen = XMLHttpRequest.prototype.open;
-            XMLHttpRequest.prototype.open = function(method, url) {
-                this._url = url;
-                this.addEventListener('load', function() {
-                    try { window.__API_INTERCEPT__[this._url] = JSON.parse(this.responseText); } catch(e) {}
-                });
-                origXhrOpen.apply(this, arguments);
-            };
-        """
-        driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {'source': interceptor_script})
-        
         driver.get(url)
-        time.sleep(5)
-        
+        time.sleep(6)
         html = driver.page_source
-        
+
+        # --- Extract chart data for all 5 types with Annual period ---
         charts = {}
         chart_types = [
             ("9", "barometer"),
@@ -84,52 +101,39 @@ def scrape_artprice():
             ("4,8", "art_prices"),
         ]
 
-        # Select Annual
+        # Select "Annual" period
         try:
-            driver.execute_script("const sel = document.querySelector('select.form-control'); if (sel) { sel.value = 'year'; sel.dispatchEvent(new Event('change', {bubbles: true})); }")
-            time.sleep(2)
+            driver.execute_script("""
+                const sel = document.querySelector('select.form-control');
+                if (sel) {
+                    sel.value = 'year';
+                    sel.dispatchEvent(new Event('change', {bubbles: true}));
+                }
+            """)
+            time.sleep(3)
         except:
             pass
 
-        # We will collect the SVG fallbacks just in case the interceptor misses something
-        def get_svg_fallback():
-            return driver.execute_script("""
-                const svg = document.querySelector('.recharts-surface');
-                if (!svg) return null;
-                const yTicks = [];
-                svg.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick').forEach(tick => {
-                    const line = tick.querySelector('line');
-                    const text = tick.querySelector('text tspan');
-                    if (line && text) yTicks.push({ y: parseFloat(line.getAttribute('y1')), val: parseFloat(text.textContent) });
-                });
-                if (yTicks.length < 2) return null;
-                yTicks.sort((a, b) => a.y - b.y);
-                const y0 = yTicks[0].y, v0 = yTicks[0].val, y1 = yTicks[yTicks.length - 1].y, v1 = yTicks[yTicks.length - 1].val;
-                const lines = {};
-                svg.querySelectorAll('.recharts-line path').forEach(path => {
-                    const name = path.getAttribute('name');
-                    const d = path.getAttribute('d');
-                    if (!name || !d || d.length < 5) return;
-                    const coords = d.match(/[\\d.]+,[\\d.]+/g);
-                    if (!coords) return;
-                    const lastY = parseFloat(coords[coords.length - 1].split(',')[1]);
-                    lines[name] = Math.round((v0 + (lastY - y0) / (y1 - y0) * (v1 - v0)) * 100) / 100;
-                });
-                return lines;
-            """)
-
         for radio_value, chart_name in chart_types:
             try:
-                driver.execute_script(f"""const radio = document.querySelector('input[type="radio"][value="{radio_value}"]'); if (radio) radio.click();""")
-                time.sleep(1)
-                charts[chart_name] = get_svg_fallback()
+                driver.execute_script(f"""
+                    const radio = document.querySelector('input[type="radio"][value="{{radio_value}}"]');
+                    if (radio) {{
+                        const label = radio.closest('label');
+                        if (label) {{
+                            label.click();
+                        }} else {{
+                            radio.click();
+                        }}
+                    }}
+                """.replace("{{radio_value}}", radio_value))
+                time.sleep(3)
+                latest = parse_svg_latest_values(driver)
+                charts[chart_name] = latest
             except:
                 charts[chart_name] = None
-                
-        # Get exact intercepted API data
-        api_data = get_intercepted_data(driver)
-        
-        data = {"data": html, "charts": charts, "api_data": api_data}
+
+        data = {"data": html, "charts": charts}
     except Exception as e:
         data = {"error": str(e), "data": ""}
     finally:
