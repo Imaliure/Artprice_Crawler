@@ -79,6 +79,11 @@ def scrape_artprice():
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--window-size=1920,1080')
+        # Speed optimizations
+        options.add_argument('--blink-settings=imagesEnabled=false')
+        options.add_argument('--disable-extensions')
+        options.add_argument('--disable-logging')
+        options.page_load_strategy = 'eager'
         return options
 
     try:
@@ -88,7 +93,7 @@ def scrape_artprice():
 
     try:
         driver.get(url)
-        time.sleep(6)
+        time.sleep(3)
         html = driver.page_source
 
         # --- Extract chart data for all 5 types with Annual period ---
@@ -110,7 +115,7 @@ def scrape_artprice():
                     sel.dispatchEvent(new Event('change', {bubbles: true}));
                 }
             """)
-            time.sleep(3)
+            time.sleep(1.5)
         except:
             pass
 
@@ -120,7 +125,7 @@ def scrape_artprice():
                     const radio = document.querySelector('input[type="radio"][value="{radio_value}"]');
                     if (radio) {{ radio.click(); }}
                 """)
-                time.sleep(2)
+                time.sleep(1)
                 latest = parse_svg_latest_values(driver)
                 charts[chart_name] = latest
             except:
