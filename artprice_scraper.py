@@ -95,50 +95,83 @@ def scrape_artprice():
 
     try:
         driver.get(url)
-        time.sleep(6)
+        time.sleep(5)
         html = driver.page_source
 
-        # --- Extract chart data for all 5 types with Annual period ---
-        charts = {}
-        chart_types = [
-            ("9", "barometer"),
-            ("1,5", "artworks_acquisition"),
-            ("2,6", "financial_situation"),
-            ("3,7", "economic_climate"),
-            ("4,8", "art_prices"),
-        ]
+        # --- Extract ALL chart data in a single async JS call ---
+        all_charts_script = """
+        const callback = arguments[arguments.length - 1];
+        const delay = ms => new Promise(r => setTimeout(r, ms));
 
-        # Select "Annual" period
-        try:
-            driver.execute_script("""
-                const sel = document.querySelector('select.form-control');
-                if (sel) {
-                    sel.value = 'year';
-                    sel.dispatchEvent(new Event('change', {bubbles: true}));
+        function readChart() {
+            const svg = document.querySelector('.recharts-surface');
+            if (!svg) return null;
+            const yTicks = [];
+            svg.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick').forEach(tick => {
+                const line = tick.querySelector('line');
+                const text = tick.querySelector('text tspan');
+                if (line && text) {
+                    yTicks.push({ y: parseFloat(line.getAttribute('y1')), val: parseFloat(text.textContent) });
                 }
-            """)
-            time.sleep(3)
-        except:
-            pass
+            });
+            if (yTicks.length < 2) return null;
+            yTicks.sort((a, b) => a.y - b.y);
+            const y0 = yTicks[0].y, v0 = yTicks[0].val;
+            const y1 = yTicks[yTicks.length - 1].y, v1 = yTicks[yTicks.length - 1].val;
+            function yToValue(yPx) { return v0 + (yPx - y0) / (y1 - y0) * (v1 - v0); }
+            const lines = {};
+            svg.querySelectorAll('.recharts-line path').forEach(path => {
+                const so = window.getComputedStyle(path).strokeOpacity;
+                const op = window.getComputedStyle(path).opacity;
+                if (so === '0' || op === '0' || path.getAttribute('stroke') === 'none') return;
+                const name = path.getAttribute('name');
+                const d = path.getAttribute('d');
+                if (!name || !d || d.length < 5) return;
+                const coords = d.match(/[\\d.]+,[\\d.]+/g);
+                if (!coords || coords.length === 0) return;
+                const lastCoord = coords[coords.length - 1].split(',');
+                lines[name] = Math.round(yToValue(parseFloat(lastCoord[1])) * 100) / 100;
+            });
+            return Object.keys(lines).length > 0 ? lines : null;
+        }
 
-        for radio_value, chart_name in chart_types:
-            try:
-                driver.execute_script("""
-                    const radio = document.querySelector('input[type="radio"][value="{{radio_value}}"]');
-                    if (radio) {
-                        const label = radio.closest('label');
-                        if (label) {
-                            label.click();
-                        } else {
-                            radio.click();
-                        }
-                    }
-                """.replace("{{radio_value}}", radio_value))
-                time.sleep(4)
-                latest = parse_svg_latest_values(driver)
-                charts[chart_name] = latest
-            except:
-                charts[chart_name] = None
+        function clickRadio(val) {
+            const radio = document.querySelector('input[type="radio"][value="' + val + '"]');
+            if (radio) {
+                const label = radio.closest('label');
+                if (label) label.click(); else radio.click();
+            }
+        }
+
+        (async () => {
+            try {
+                // Select Annual period
+                const sel = document.querySelector('select.form-control');
+                if (sel) { sel.value = 'year'; sel.dispatchEvent(new Event('change', {bubbles: true})); }
+                await delay(2000);
+
+                const chartTypes = [
+                    ['9', 'barometer'],
+                    ['1,5', 'artworks_acquisition'],
+                    ['2,6', 'financial_situation'],
+                    ['3,7', 'economic_climate'],
+                    ['4,8', 'art_prices']
+                ];
+                const results = {};
+                for (const [val, name] of chartTypes) {
+                    clickRadio(val);
+                    await delay(1500);
+                    results[name] = readChart();
+                }
+                callback(results);
+            } catch(e) {
+                callback({error: e.message});
+            }
+        })();
+        """
+
+        driver.set_script_timeout(30)
+        charts = driver.execute_async_script(all_charts_script) or {}
 
         data = {"data": html, "charts": charts}
     except Exception as e:
