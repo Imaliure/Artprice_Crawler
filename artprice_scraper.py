@@ -123,16 +123,16 @@ def scrape_artprice():
 
         for radio_value, chart_name in chart_types:
             try:
-                driver.execute_script(f"""
+                driver.execute_script("""
                     const radio = document.querySelector('input[type="radio"][value="{{radio_value}}"]');
-                    if (radio) {{
+                    if (radio) {
                         const label = radio.closest('label');
-                        if (label) {{
+                        if (label) {
                             label.click();
-                        }} else {{
+                        } else {
                             radio.click();
-                        }}
-                    }}
+                        }
+                    }
                 """.replace("{{radio_value}}", radio_value))
                 time.sleep(4)
                 latest = parse_svg_latest_values(driver)
