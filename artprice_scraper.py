@@ -160,7 +160,7 @@ def scrape_artprice():
                 const results = {};
                 for (const [val, name] of chartTypes) {
                     clickRadio(val);
-                    await delay(1500);
+                    await delay(2000);
                     results[name] = readChart();
                 }
                 callback(results);
