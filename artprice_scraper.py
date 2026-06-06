@@ -14,6 +14,10 @@ except ImportError:
 
 app = FastAPI(title="Artprice Scraper API")
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 
 def parse_svg_latest_values(driver):
     """Extract the latest data point from each SVG chart line using y-axis scale."""
