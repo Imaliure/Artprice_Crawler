@@ -89,7 +89,10 @@ def scrape_artprice():
         return options
 
     try:
-        driver = uc.Chrome(options=get_options())
+        driver = uc.Chrome(
+        options=get_options(),
+        driver_executable_path='/usr/local/bin/chromedriver'
+    )
     except Exception as e:
         return {"error": f"Failed to initialize Chrome: {str(e)}"}
 
