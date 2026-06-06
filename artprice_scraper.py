@@ -15,6 +15,7 @@ except ImportError:
 app = FastAPI(title="Artprice Scraper API")
 
 @app.get("/health")
+@app.head("/health")
 def health():
     return {"status": "ok"}
 
